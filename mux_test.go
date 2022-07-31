@@ -2913,6 +2913,131 @@ func TestGetVarNames(t *testing.T) {
 	}
 }
 
+func getPopulateContextTestCases() []struct {
+	name                 string
+	path                 string
+	omitRouteFromContext bool
+	wantVar              string
+	wantStaticRoute      bool
+	wantDynamicRoute     bool
+} {
+	return []struct {
+		name                 string
+		path                 string
+		omitRouteFromContext bool
+		wantVar              string
+		wantStaticRoute      bool
+		wantDynamicRoute     bool
+	}{
+		{
+			name:            "no populated vars",
+			path:            "/static",
+			wantVar:         "",
+			wantStaticRoute: true,
+		},
+		{
+			name:             "empty var",
+			path:             "/dynamic/",
+			wantVar:          "",
+			wantDynamicRoute: true,
+		},
+		{
+			name:             "populated vars",
+			path:             "/dynamic/foo",
+			wantVar:          "foo",
+			wantDynamicRoute: true,
+		},
+		{
+			name:                 "omit route /static",
+			path:                 "/static",
+			omitRouteFromContext: true,
+			wantVar:              "",
+			wantStaticRoute:      false,
+		},
+		{
+			name:                 "omit route /dynamic",
+			path:                 "/dynamic/",
+			omitRouteFromContext: true,
+			wantVar:              "",
+			wantDynamicRoute:     false,
+		},
+	}
+}
+
+func TestPopulateContext(t *testing.T) {
+	testCases := getPopulateContextTestCases()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched := false
+			r := NewRouter()
+			// NOTE: Skip configuration for baseline.
+			// r.OmitRouteFromContext(tc.omitRouteFromContext)
+			var static *Route
+			var dynamic *Route
+			fn := func(w http.ResponseWriter, r *http.Request) {
+				matched = true
+				if got := Vars(r)["x"]; got != tc.wantVar {
+					t.Fatalf("wantVar=%q, got=%q", tc.wantVar, got)
+				}
+				switch {
+				case tc.wantDynamicRoute:
+					r2 := CurrentRoute(r)
+					if r2 != dynamic || r2.GetName() != "dynamic" {
+						t.Fatalf("expected dynmic route in ctx, got %v", r2)
+					}
+				case tc.wantStaticRoute:
+					r2 := CurrentRoute(r)
+					if r2 != static || r2.GetName() != "static" {
+						t.Fatalf("expected static route in ctx, got %v", r2)
+					}
+				default:
+					if r2 := CurrentRoute(r); r2 != nil {
+						// NOTE: Skip assertion for baseline.
+						// t.Fatalf("expected no route in ctx, got %v", r2)
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}
+			static = r.Name("static").Path("/static").HandlerFunc(fn)
+			dynamic = r.Name("dynamic").Path("/dynamic/{x:.*}").HandlerFunc(fn)
+			req := newRequest(http.MethodGet, "http://localhost"+tc.path)
+			rec := NewRecorder()
+			r.ServeHTTP(rec, req)
+			if !matched {
+				t.Fatal("Expected route to match")
+			}
+		})
+	}
+}
+
+func BenchmarkPopulateContext(b *testing.B) {
+	testCases := getPopulateContextTestCases()
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			matched := false
+			r := NewRouter()
+			// NOTE: Skip configuration for baseline.
+			// r.OmitRouteFromContext(tc.omitRouteFromContext)
+			fn := func(w http.ResponseWriter, r *http.Request) {
+				matched = true
+				w.WriteHeader(http.StatusNoContent)
+			}
+			r.Name("static").Path("/static").HandlerFunc(fn)
+			r.Name("dynamic").Path("/dynamic/{x:.*}").HandlerFunc(fn)
+			req := newRequest(http.MethodGet, "http://localhost"+tc.path)
+			rec := NewRecorder()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				r.ServeHTTP(rec, req)
+			}
+			if !matched {
+				b.Fatal("Expected route to match")
+			}
+		})
+	}
+}
+
 // mapToPairs converts a string map to a slice of string pairs
 func mapToPairs(m map[string]string) []string {
 	var i int
